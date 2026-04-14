@@ -3,19 +3,19 @@
 #include "Models.hpp"
 #include <vector>
 #include <string>
-#include <map>
 
 struct EncodedField_t
 {
-    std::string value;
-    int lsb;
     int msb;
+    int lsb;
+    std::string name;
+    std::string value;
 };
 
 struct EncodedInsn_t
 {
     std::string name;
-    std::map<std::string, EncodedField_t> fields;
+    std::vector<EncodedField_t> fields;
 };
 
 class Encoder
@@ -30,4 +30,5 @@ class Encoder
 
         std::string toBinary(int value, int width) const;
         int calcWidth(int number) const;
-}
+        bool isFieldFlexible(const std::string& name) const;
+};
