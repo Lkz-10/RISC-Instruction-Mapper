@@ -6,5 +6,5 @@
 class Parser
 {
     public:
-        static EncodingSpecs parseRequirements(const std::string& filename);
+        static EncodingSpecs_t parseRequirements(const std::string& filename);
 };

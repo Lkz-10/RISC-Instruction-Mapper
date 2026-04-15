@@ -2,17 +2,17 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 
-EncodingSpecs Parser::parseRequirements(const std::string& filename)
+EncodingSpecs_t Parser::parseRequirements(const std::string& filename)
 {
     std::ifstream file(filename);
-    if (!file.is_open()) {throw std::string{"Could not open file: " + filename}};
+    if (!file.is_open()) {throw std::runtime_error("Could not open file: " + filename);}
 
     nlohmann::json input_json;
     file >> input_json;
 
     EncodingSpecs_t data{};
 
-    data.length = std::stoi(input_json.at("length").get<std::string>());
+    data.totalWidth = std::stoi(input_json.at("length").get<std::string>());
 
     for (const auto& field_item: input_json.at("fields")) {
         auto it = field_item.begin();
@@ -21,10 +21,10 @@ EncodingSpecs Parser::parseRequirements(const std::string& filename)
 
         std::string val = it.value();
         if (val.find(">=") == 0) {              //FIND
-            field.size = std::stoi(val.substr(2));
+            field.width = std::stoi(val.substr(2));
             field.isFlexible = true;
         } else {
-            field.size = std::stoi(val);
+            field.width = std::stoi(val);
             field.isFlexible = false;
         }
         data.fields.push_back(field);

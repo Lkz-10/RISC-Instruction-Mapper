@@ -2,6 +2,7 @@
 #include <cmath>
 #include <algorithm>
 #include <stdexcept>
+#include <numeric>
 
 Encoder::Encoder(const EncodingSpecs_t& specs) : specs_(specs) {}
 
@@ -23,102 +24,193 @@ int Encoder::calcWidth(int number) const
 bool Encoder::isFieldFlexible(const std::string& name) const
 {
     for (const auto& field : specs_.fields) {
-        if (field.name == name) return field.is_flexible;
+        if (field.name == name) return field.isFlexible;
     }
     return false;
 }
 
+int Encoder::getFieldMinWidth(const std::string& name) const
+{
+    for (const auto& field : specs_.fields) {
+        if (field.name == name) return field.width;
+    }
+    throw std::runtime_error("Unknown field: " + name);
+}
+
+void Encoder::setBasicFields() // set "F" and "OPCODE"(if necessary) fields
+{
+    // Set "F"
+    int f_width = calcWidth(specs_.formats.size());
+    global_placement_["F"] = {specs_.totalWidth - 1, specs_.totalWidth - f_width};
+
+    // Set "OPCODE"
+    int max_op_width = 0;
+    for (const auto& fmt : specs_.formats) {
+        if (fmt.insns.size() > 1)
+            max_op_width = std::max(max_op_width, calcWidth(fmt.insns.size()));
+    }
+
+    if (max_op_width > 0) {
+        int start_bit = global_placement_["F"].lsb - 1;
+        global_placement_["OPCODE"] = {start_bit, start_bit - max_op_width + 1};
+    }
+}
+
+std::vector<Block_t> Encoder::findFreeBlocks(const InstructionsFormat_t& fmt) const
+{
+    std::vector<bool> used(specs_.totalWidth, false);
+
+    auto mark = [&](const std::string& name) {
+        if (global_placement_.count(name)) {
+            auto range = global_placement_.at(name);
+            for (int i = range.lsb; i <= range.msb; ++i) used[i] = true;
+        }
+    };
+
+    // Mark all used fields
+    mark("F");
+    if (fmt.insns.size() > 1) mark("OPCODE");
+    for (const auto& field : fmt.operands) mark(field);
+
+    // Find all free blocks
+    std::vector<Block_t> blocks{};
+    int current_msb = -1;
+    for (int i = specs_.totalWidth - 1; i >= 0; --i) {
+        if (!used[i]) {
+            if (current_msb == -1) current_msb = i;
+            if (i == 0 || used[i - 1]) {
+                blocks.push_back({current_msb, i});
+                current_msb = -1;
+            }
+        } else current_msb = -1;
+    }
+    return blocks;
+}
+
+bool Encoder::solvePlacement(std::vector<std::string> unassigned, std::vector<Block_t> blocks,
+                             std::map<std::string, Placement_t>& local_results)
+{
+    if (unassigned.empty()) return true;
+
+    std::string field = unassigned[0];
+    unassigned.erase(unassigned.begin());
+    int min_width = getFieldMinWidth(field);
+    bool flex = isFieldFlexible(field);
+
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        Block_t b = blocks[i];
+        if (b.size() >= min_width) {
+            Placement_t range;
+            std::vector<Block_t> next_blocks = blocks;
+
+            if (flex) {
+                // Take all the block
+                range = {b.msb, b.lsb};
+                next_blocks.erase(next_blocks.begin() + i);
+            } else {
+                // Take the highest bits
+                range = {b.msb, b.msb - min_width + 1};
+                next_blocks[i].msb = range.lsb - 1;
+                if (next_blocks[i].size() == 0) next_blocks.erase(next_blocks.begin() + i);
+            }
+
+            local_results[field] = range;
+            if (solvePlacement(unassigned, next_blocks, local_results)) return true;
+            local_results.erase(field);
+        }
+    }
+    return false;
+}
+
+void Encoder::mapFormatFields()
+{
+    std::vector<int> indices(specs_.formats.size());
+    std::iota(indices.begin(), indices.end(), 0);
+
+    // Firstly less flexible formats
+    std::sort(indices.begin(), indices.end(), [&](int a, int b) {
+        auto count_flex = [&](int idx) {
+            int flex_cnt = 0;
+            for (const auto& op : specs_.formats[idx].operands)
+                if (isFieldFlexible(op)) flex_cnt++;
+            return flex_cnt;
+        };
+        return count_flex(a) < count_flex(b);
+    });
+
+    for (int idx : indices) {
+        const auto& fmt = specs_.formats[idx];
+        std::vector<std::string> unassigned;
+        for (const auto& op : fmt.operands) {
+            if (global_placement_.find(op) == global_placement_.end()) unassigned.push_back(op);
+        }
+
+        if (unassigned.empty()) continue;
+
+        std::map<std::string, Placement_t> local_res;
+        if (solvePlacement(unassigned, findFreeBlocks(fmt), local_res)) {
+            global_placement_.insert(local_res.begin(), local_res.end());
+        } else {
+            throw std::runtime_error("Failed to encode format: " + fmt.formatName);
+        }
+    }
+}
+
 std::vector<EncodedInsn_t> Encoder::generateLayout()
 {
+    setBasicFields();
+    mapFormatFields();
+
     std::vector<EncodedInsn_t> result{};
-
-    int current_msb = specs_.totalWidth - 1;
-    int f_width = calcWidth(specs_.formats.size());
-    int f_msb = current_msb;
-    int f_lsb = current_msb - f_width + 1;
-    current_msb = f_lsb - 1;
-
-    int max_opcode_width = 0;
-    for (const auto& format : specs_.formats) {
-        max_opcode_width = std::max(max_opcode_width, calcWidth(format.insns.size()));
-    }
-    int opcode_msb = current_msb;
-    int opcode_lsb = current_msb - max_opcode_width + 1;
-    current_msb = opcode_lsb - 1;
-
-    std::map<std::string, std::pair<int, int>> fields_map{};
-    for (const auto& field : specs_.fields) {
-        int width = field.width;
-        if (current_msb - width + 1 < 0) {
-            throw std::runtime_error("Error: total field width exceeds required total instruction width");
-        }
-        fields_map[field.name] = {current_msb, current_msb - width + 1};
-        current_msb -= width;
-    }
-
     for (size_t f_idx = 0; f_idx < specs_.formats.size(); ++f_idx) {
-        const auto& format{specs_.formats[f_idx]};
+        const auto& fmt = specs_.formats[f_idx];
 
-        for (size_t i_idx = 0; i_idx < format.insns.size(); ++i_idx) {
+        for (size_t i_idx = 0; i_idx < fmt.insns.size(); ++i_idx) {
             EncodedInsn_t insn{};
-            insn.name = format.insns[i_idx];
+            insn.name = fmt.insns[i_idx];
 
-            std::vector<EncodedField_t> active_fields{};
+            std::vector<EncodedField_t> fields{};
 
-            active_fields.push_back({f_msb, f_lsb, "F", toBinary(static_cast<int>(f_idx), f_width)});
+            auto fRange = global_placement_["F"];
+            fields.push_back({fRange.msb, fRange.lsb, "F", toBinary(f_idx, fRange.msb - fRange.lsb + 1)});
 
-            std::string op_name{(format.formatName == "branch") ? "CODE" : "OPCODE"}; // TO README
-            active_fields.push_back({opcode_msb, opcode_lsb, op_name, toBinary(static_cast<int>(i_idx), max_opcode_width)});
-
-            for (const auto& op : format.operands) {
-                auto it = fields_map.find(op);
-                if (it != fields_map.end()) {
-                    active_fields.push_back({it->second.first, it->second.second, op, "+"});
-                } else {
-                    throw std::runtime_error("Error: Missing field definition for " + op);
-                }
+            if (fmt.insns.size() > 1) {
+                auto opcodeRange = global_placement_["OPCODE"];
+                fields.push_back({opcodeRange.msb, opcodeRange.lsb, "OPCODE",
+                                  toBinary(i_idx, opcodeRange.msb - opcodeRange.lsb + 1)});
             }
 
-            std::sort(active_fields.begin(), active_fields.end(),
-                      [](const EncodedField_t& a, const EncodedField_t& b) {return a.msb > b.msb;});
+            for (const auto& op : fmt.operands) {
+                auto opRange = global_placement_.at(op);
+                fields.push_back({opRange.msb, opRange.lsb, op, "+"});
+            }
 
-            int current_bit = specs_.totalWidth - 1;
-            int res_cnt = 0;
+            std::sort(fields.begin(), fields.end(), [](auto& a, auto& b) { return a.msb > b.msb; });
+
             std::vector<EncodedField_t> final_fields{};
+            int current_bit = specs_.totalWidth - 1;
+            int res_idx = 0;
 
-            for (size_t i = 0; i < active_fields.size(); ++i) {
-                auto& field = active_fields[i];
-
+            // completing final fields array
+            for (const auto& field : fields) {
+                // Add RES if necessary
                 if (current_bit > field.msb) {
-                    int res_msb = current_bit;
-                    int res_lsb = field.msb + 1;
-                    std::string res_name{"RES" + std::to_string(res_cnt++)};
-                    final_fields.push_back({res_msb, res_lsb, res_name, toBinary(0, res_msb - res_lsb + 1)});
+                    int next_stop = field.msb + 1;
+                    final_fields.push_back({current_bit, next_stop, "RES" + std::to_string(res_idx++), toBinary(0, current_bit - next_stop + 1)});
+                    current_bit = next_stop - 1;
                 }
-
-                if (isFieldFlexible(field.name)) {
-                    if (i + 1 < active_fields.size()) {
-                        field.lsb = active_fields[i+1].msb + 1;
-                    } else {
-                        field.lsb = 0;
-                    }
-                }
-
                 final_fields.push_back(field);
                 current_bit = field.lsb - 1;
-
-                if (field.lsb == 0) break;
             }
 
+            // Add RES if necessary
             if (current_bit >= 0) {
-                std::string res_name{"RES" + std::to_string(res_cnt++)};
-                final_fields.push_back({current_bit, 0, res_name, toBinary(0, current_bit + 1)});
+                final_fields.push_back({current_bit, 0, "RES" + std::to_string(res_idx++), toBinary(0, current_bit + 1)});
             }
 
             insn.fields = final_fields;
             result.push_back(insn);
         }
     }
-
     return result;
 }
