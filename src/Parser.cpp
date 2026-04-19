@@ -20,7 +20,7 @@ EncodingSpecs_t Parser::parseRequirements(const std::string& filename)
         field.name = it.key();
 
         std::string val = it.value();
-        if (val.find(">=") == 0) {              //FIND
+        if (val.find(">=") == 0) {
             field.width = std::stoi(val.substr(2));
             field.isFlexible = true;
         } else {

@@ -13,7 +13,7 @@ From the root folder:
   mkdir build
   cd build
   cmake ..
-  make
+  cmake --build .
 ```
 
 ### Usage
@@ -22,5 +22,5 @@ The program takes two command-line arguments: the path to the input JSON file co
   ./RISC_Instruction_Mapper ../data/input.json ../data/output.json
 ```
 
-## Example Input File (`data/input.json`) 
+## Example Input File (`data/input.json`)
 <img width="787" height="530" alt="image" src="https://github.com/user-attachments/assets/fe52618e-5a4f-40b5-a267-26b92a775e8d" />

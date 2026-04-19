@@ -1,5 +1,6 @@
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 cmake_minimum_required(VERSION 3.14)
+cmake_policy(SET CMP0135 NEW)
 project(RISC_Instruction_Mapper LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)

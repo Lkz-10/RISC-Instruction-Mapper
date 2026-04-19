@@ -61,8 +61,10 @@ std::vector<Block_t> Encoder::findFreeBlocks(const InstructionsFormat_t& fmt) co
     std::vector<bool> used(specs_.totalWidth, false);
 
     auto mark = [&](const std::string& name) {
-        if (global_placement_.count(name)) {
-            auto range = global_placement_.at(name);
+        auto it = global_placement_.find(name);
+
+        if (it != global_placement_.end()) {
+            auto range = it->second;
             for (int i = range.lsb; i <= range.msb; ++i) used[i] = true;
         }
     };
@@ -98,18 +100,18 @@ bool Encoder::solvePlacement(std::vector<std::string> unassigned, std::vector<Bl
     bool flex = isFieldFlexible(field);
 
     for (size_t i = 0; i < blocks.size(); ++i) {
-        Block_t b = blocks[i];
-        if (b.size() >= min_width) {
-            Placement_t range;
+        Block_t block = blocks[i];
+        if (block.size() >= min_width) {
+            Placement_t range{};
             std::vector<Block_t> next_blocks = blocks;
 
             if (flex) {
                 // Take all the block
-                range = {b.msb, b.lsb};
+                range = {block.msb, block.lsb};
                 next_blocks.erase(next_blocks.begin() + i);
             } else {
                 // Take the highest bits
-                range = {b.msb, b.msb - min_width + 1};
+                range = {block.msb, block.msb - min_width + 1};
                 next_blocks[i].msb = range.lsb - 1;
                 if (next_blocks[i].size() == 0) next_blocks.erase(next_blocks.begin() + i);
             }
@@ -147,7 +149,7 @@ void Encoder::mapFormatFields()
 
         if (unassigned.empty()) continue;
 
-        std::map<std::string, Placement_t> local_res;
+        std::map<std::string, Placement_t> local_res{};
         if (solvePlacement(unassigned, findFreeBlocks(fmt), local_res)) {
             global_placement_.insert(local_res.begin(), local_res.end());
         } else {
@@ -175,7 +177,7 @@ std::vector<EncodedInsn_t> Encoder::generateLayout()
             fields.push_back({fRange.msb, fRange.lsb, "F", toBinary(f_idx, fRange.msb - fRange.lsb + 1)});
 
             if (fmt.insns.size() > 1) {
-                auto opcodeRange = global_placement_["OPCODE"];
+                auto opcodeRange = global_placement_.at("OPCODE");
                 fields.push_back({opcodeRange.msb, opcodeRange.lsb, "OPCODE",
                                   toBinary(i_idx, opcodeRange.msb - opcodeRange.lsb + 1)});
             }
@@ -196,7 +198,8 @@ std::vector<EncodedInsn_t> Encoder::generateLayout()
                 // Add RES if necessary
                 if (current_bit > field.msb) {
                     int next_stop = field.msb + 1;
-                    final_fields.push_back({current_bit, next_stop, "RES" + std::to_string(res_idx++), toBinary(0, current_bit - next_stop + 1)});
+                    final_fields.push_back({current_bit, next_stop, "RES" + std::to_string(res_idx++),
+                                            toBinary(0, current_bit - next_stop + 1)});
                     current_bit = next_stop - 1;
                 }
                 final_fields.push_back(field);
@@ -205,7 +208,8 @@ std::vector<EncodedInsn_t> Encoder::generateLayout()
 
             // Add RES if necessary
             if (current_bit >= 0) {
-                final_fields.push_back({current_bit, 0, "RES" + std::to_string(res_idx++), toBinary(0, current_bit + 1)});
+                final_fields.push_back({current_bit, 0, "RES" + std::to_string(res_idx++),
+                                        toBinary(0, current_bit + 1)});
             }
 
             insn.fields = final_fields;
